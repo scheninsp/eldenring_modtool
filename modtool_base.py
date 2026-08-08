@@ -9,7 +9,7 @@ import bpy
 
 # 公共面板，所有工具共用
 class VIEW3D_PT_ModToolBasePanel(bpy.types.Panel):
-    bl_label = "模型清理工具"
+    bl_label = "Eldenring模型工具"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "ERModTool"
