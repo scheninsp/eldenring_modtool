@@ -15,6 +15,61 @@ import bpy
 import bmesh
 import mathutils
 
+
+def hungarian(cost_matrix):
+    """匈牙利算法：给定 n×n 代价矩阵，返回最小代价完美匹配。
+    cost_matrix[i][j] = 将行 i 分配给列 j 的代价。
+    返回: assignment[i] = 分配给行 i 的列索引
+    O(n³)，输入不修改。
+    """
+    n = len(cost_matrix)
+    u = [0] * (n + 1)    # 行势
+    v = [0] * (n + 1)    # 列势
+    p = [0] * (n + 1)    # p[j] = 分配给列 j 的行 (1-indexed)
+    way = [0] * (n + 1)  # 增广路径回溯
+
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0
+        minv = [float('inf')] * (n + 1)
+        used = [False] * (n + 1)
+        while True:
+            used[j0] = True
+            i0 = p[j0]
+            delta = float('inf')
+            j1 = 0
+            for j in range(1, n + 1):
+                if not used[j]:
+                    cur = cost_matrix[i0 - 1][j - 1] - u[i0] - v[j]
+                    if cur < minv[j]:
+                        minv[j] = cur
+                        way[j] = j0
+                    if minv[j] < delta:
+                        delta = minv[j]
+                        j1 = j
+            for j in range(n + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+
+    assignment = [0] * n
+    for j in range(1, n + 1):
+        if p[j] != 0:
+            assignment[p[j] - 1] = j - 1
+    return assignment
+
+
 class UV_OT_HairStripNormalize(bpy.types.Operator):
     bl_idname = "uv.hair_strip_normalize"
     bl_label = "一键发丝UV长条拉直规整"
@@ -146,33 +201,52 @@ class UV_OT_HairStripNormalize(bpy.types.Operator):
                 print(f"  边 v{v0.index}({'A' if in_a0 else 'B' if in_b0 else '?'})-v{v1.index}({'A' if in_a1 else 'B' if in_b1 else '?'}) "
                       f"coords: ({v0.co.x:.4f},{v0.co.y:.4f},{v0.co.z:.4f}) - ({v1.co.x:.4f},{v1.co.y:.4f},{v1.co.z:.4f})")
 
-        # 用连接两条边线的横档边建立左右顶点对应
-        # 先收集所有 chain_a 顶点到 chain_b 顶点的连接（可能有三角化导致的多对多）
-        # 再用索引匹配消除歧义：chain_a[i] 对应 chain_b 中索引最接近 i 的那个
+        # 用匈牙利算法建立左右顶点一一对应
+        # 代价矩阵：有横档边 → cost = |i-j|（索引接近优先）；无边 → cost = n²（严厉惩罚，尽量不用）
         b_index = {v: i for i, v in enumerate(chain_b)}  # vertex -> index in chain_b
-        partner = {}
+        n = len(chain_a)
+
+        # 先收集每个 chain_a 顶点的边邻接候选，同时检查是否有孤立顶点
+        edge_candidates = []  # edge_candidates[i] = set of chain_b vertices connected to chain_a[i]
         for i, v in enumerate(chain_a):
-            candidates = set()
+            cand = set()
             for e in v.link_edges:
                 other = e.other_vert(v)
                 if other in b_set:
-                    candidates.add(other)
-            if not candidates:
+                    cand.add(other)
+            edge_candidates.append(cand)
+            if not cand:
                 print(f"=====错误：chain_a[{i}] v{v.index} 没有连接到chain_b的边！=====")
                 self.report({'ERROR'}, "左右边线之间缺少连接边（横档），无法建立对应")
                 return {'CANCELLED'}
-            # 选 chain_b 中索引最接近 i 的那个（三角化对角线会连到 i±1）
-            best = min(candidates, key=lambda bv: abs(b_index[bv] - i))
-            partner[v] = best
+
+        # 构建 n×n 代价矩阵
+        cost = [[0] * n for _ in range(n)]
+        for i in range(n):
+            for j in range(n):
+                if chain_b[j] in edge_candidates[i]:
+                    cost[i][j] = abs(i - j)      # 有边：索引越接近代价越小
+                else:
+                    cost[i][j] = n * n            # 无边：高代价，仅在必要时使用
+
+        assignment = hungarian(cost)  # assignment[i] = chain_b 中分配给 chain_a[i] 的列索引
+        partner = {chain_a[i]: chain_b[assignment[i]] for i in range(n)}
+
+        # 调试打印匹配结果
+        for i in range(n):
+            candidates = edge_candidates[i]
+            j = assignment[i]
+            bj = chain_b[j]
+            edge_type = "有边" if bj in candidates else "无边(惩罚匹配)"
             if len(candidates) > 1:
-                print(f"注意：chain_a[{i}] v{v.index} 连接多个chain_b顶点: "
-                      f"{[(bv.index, b_index[bv]) for bv in candidates]}，选择 chain_b[{b_index[best]}] v{best.index}")
+                cand_str = ", ".join(f"chain_b[{b_index[bv]}]" for bv in candidates)
+                print(f"匈牙利：chain_a[{i}] v{chain_a[i].index} 候选=[{cand_str}] → chain_b[{j}] v{bj.index} ({edge_type}, 代价={cost[i][j]})")
+            elif len(candidates) == 1:
+                bv = list(candidates)[0]
+                print(f"匈牙利：chain_a[{i}] v{chain_a[i].index} 单候选 chain_b[{b_index[bv]}] → chain_b[{j}] v{bj.index} ({edge_type}, 代价={cost[i][j]})")
 
         left_order = chain_a
         right_order = [partner[v] for v in chain_a]
-        if len(set(right_order)) != len(right_order):
-            self.report({'ERROR'}, "左右顶点对应关系重复，无法建立一一对应")
-            return {'CANCELLED'}
 
         # 取顶点在选中边上的 UV
         # 不依赖 loop.edge（受面 winding 影响），而是通过选中边的 link_faces 找面，再从面里定位顶点
@@ -231,19 +305,20 @@ class UV_OT_HairStripNormalize(bpy.types.Operator):
         self.report({'INFO'}, f"UV 长条已规整为矩形竖条（{len(left_order) - 1} 段）完成")
         return {'FINISHED'}
 
-# 挂载到 UV 编辑器顶部菜单
-def draw_button(self, context):
-    self.layout.operator(UV_OT_HairStripNormalize.bl_idname)
+# 挂载到 ModTool 公共面板
+def draw_panel_button(self, context):
+    layout = self.layout
+    layout.operator(UV_OT_HairStripNormalize.bl_idname)
 
 classes = [UV_OT_HairStripNormalize]
 
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-    bpy.types.IMAGE_MT_uvs.append(draw_button)
+    bpy.types.VIEW3D_PT_ModToolBasePanel.append(draw_panel_button)
 
 def unregister():
-    bpy.types.IMAGE_MT_uvs.remove(draw_button)
+    bpy.types.VIEW3D_PT_ModToolBasePanel.remove(draw_panel_button)
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 
