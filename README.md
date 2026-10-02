@@ -1,7 +1,7 @@
 eldenring modding tool
 
 用法：
-git clone 到路径 `C:\Users\infin\AppData\Roaming\Blender Foundation\Blender\3.6\scripts\addons\eldenring_modtool`
+git clone 到路径 `C:\Users\<USER>\AppData\Roaming\Blender Foundation\Blender\3.6\scripts\addons\eldenring_modtool`
 
 配合 soulstruct 的 blender 导出插件使用。
 blender3.6 + io_soulstruct1.8
